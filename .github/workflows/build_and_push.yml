@@ -13,13 +13,13 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # CACHE z DockerHuba: mekkr/app-cache
+      # Turtle: CACHE z DockerHuba
       DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/app-cache
-      # Finalny obraz: ghcr.io/m1k0l4aj/weather-app
-      IMAGE_NAME:    ghcr.io/${{ secrets.GHCR_USERNAME }}/weather-app
+      # Finalny obraz w GHCR (musi być lowercase!): ghcr.io/m1k0l4aj/weather-app
+      IMAGE_NAME:      ghcr.io/${{ secrets.GHCR_USERNAME }}/weather-app
 
     steps:
-      # 1) Przygotowujemy QEMU i Buildx, by móc budować multi-arch obrazy
+      # 1) Przygotowujemy QEMU i Buildx do budowy multi-arch
       - name: Set up QEMU (to support building multi-arch images)
         uses: docker/setup-qemu-action@v2
 
@@ -28,7 +28,7 @@ jobs:
         with:
           buildkitd-flags: --allow-insecure-entitlement security.insecure
 
-      # 2) Logujemy się do DockerHuba (żeby używać cache) oraz do GHCR (żeby wypchnąć finalny obraz)
+      # 2) Logowanie do DockerHuba (cache) oraz GHCR (push)
       - name: Log in to DockerHub
         uses: docker/login-action@v2
         with:
@@ -43,27 +43,28 @@ jobs:
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.CR_PAT }}
 
-      # 3) Budujemy multi-arch obraz i zapisujemy (i pobieramy) cache z DockerHuba
+      # 3) Budowa multi-arch obrazu i zapis/pobranie cache z DockerHuba
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v4
         with:
-          # kontekst = katalog główny repo (jeden poziom wyżej niż .github/workflows)
-          context: ../
-          file: ../Dockerfile
+          # UWAGA: kontekst to katalog główny repo, czyli "."
+          context: .
+          # TUTAJ: plik Dockerfile także w katalogu głównym repo, więc wystarczy "Dockerfile"
+          file: Dockerfile
           platforms: linux/amd64,linux/arm64
 
-          # Pobieramy wcześniejszy cache (jeśli istnieje):
+          # Pobieramy cache z "mekkr/app-cache:cache-latest"
           cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-latest
-          # Zapisujemy nowy cache pod tagiem: mekkr/app-cache:cache-<SHA>
+          # Zapisujemy cache pod "mekkr/app-cache:cache-<SHA>"
           cache-to:   type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-${{ github.sha }},mode=max
 
-          # Tagi finalnego obrazu (jeszcze go nie wypychamy – tylko przygotowujemy warstwy):
+          # Tagi finalnego obrazu (jeszcze nie wypychamy):
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           push: false
 
-      # 4) Instalujemy Trivy (narzędzie do skanowania CVE)
+      # 4) Instalacja Trivy (skan CVE)
       - name: Install Trivy
         run: |
           sudo apt-get update
@@ -74,14 +75,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
-      # 5) Skanowanie obrazu Trivy – jeśli znajdzie CVE na poziomie CRITICAL/HIGH, zakończy job błędem
+      # 5) Skaning obrazu (CRITICAL + HIGH)
       - name: Run Trivy scan on built images
         id: trivy-scan
         run: |
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/amd64
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/arm64
 
-      # 6) Jeżeli Trivy nie zgłosi żadnych CRITICAL/HIGH CVE, wypchnij obrazy do GHCR
+      # 6) Jeżeli nie ma CRITICAL/HIGH CVE, wypychamy obraz do GHCR
       - name: Push images to GHCR
         if: ${{ success() }}
         run: |
