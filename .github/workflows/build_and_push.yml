@@ -13,12 +13,13 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # <- TUTAJ musimy mieć DOKŁADNIE "mekkr/app-cache"
+      # CACHE z DockerHuba: mekkr/app-cache
       DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/app-cache
-      IMAGE_NAME:      ghcr.io/${{ secrets.GHCR_USERNAME }}/weather-app
+      # Finalny obraz: ghcr.io/m1k0l4aj/weather-app
+      IMAGE_NAME:    ghcr.io/${{ secrets.GHCR_USERNAME }}/weather-app
 
     steps:
-      # 1) Set up QEMU (potrzebne do budowy multi-arch)
+      # 1) Przygotowujemy QEMU i Buildx, by móc budować multi-arch obrazy
       - name: Set up QEMU (to support building multi-arch images)
         uses: docker/setup-qemu-action@v2
 
@@ -27,7 +28,7 @@ jobs:
         with:
           buildkitd-flags: --allow-insecure-entitlement security.insecure
 
-      # 2) Logowanie do DockerHuba (cache) oraz GHCR
+      # 2) Logujemy się do DockerHuba (żeby używać cache) oraz do GHCR (żeby wypchnąć finalny obraz)
       - name: Log in to DockerHub
         uses: docker/login-action@v2
         with:
@@ -42,23 +43,27 @@ jobs:
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.CR_PAT }}
 
-      # 3) Budowa multi-arch obrazu i zapis cache w DockerHubie
+      # 3) Budujemy multi-arch obraz i zapisujemy (i pobieramy) cache z DockerHuba
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v4
         with:
+          # kontekst = katalog główny repo (jeden poziom wyżej niż .github/workflows)
           context: ../
           file: ../Dockerfile
           platforms: linux/amd64,linux/arm64
 
+          # Pobieramy wcześniejszy cache (jeśli istnieje):
           cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-latest
+          # Zapisujemy nowy cache pod tagiem: mekkr/app-cache:cache-<SHA>
           cache-to:   type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-${{ github.sha }},mode=max
 
+          # Tagi finalnego obrazu (jeszcze go nie wypychamy – tylko przygotowujemy warstwy):
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           push: false
 
-      # 4) Instalacja Trivy (skaner CVE)
+      # 4) Instalujemy Trivy (narzędzie do skanowania CVE)
       - name: Install Trivy
         run: |
           sudo apt-get update
@@ -69,17 +74,16 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
-      # 5) Skanowanie obrazu Trivy pod kątem CVE (CRITICAL i HIGH)
+      # 5) Skanowanie obrazu Trivy – jeśli znajdzie CVE na poziomie CRITICAL/HIGH, zakończy job błędem
       - name: Run Trivy scan on built images
         id: trivy-scan
         run: |
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/amd64
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/arm64
 
-      # 6) Jeśli Trivy nie zwróci błędów (brak CRITICAL/HIGH) – wypychamy obraz do GHCR
+      # 6) Jeżeli Trivy nie zgłosi żadnych CRITICAL/HIGH CVE, wypchnij obrazy do GHCR
       - name: Push images to GHCR
         if: ${{ success() }}
         run: |
           docker push ${{ env.IMAGE_NAME }}:latest
           docker push ${{ env.IMAGE_NAME }}:${{ github.sha }}
-
