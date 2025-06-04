@@ -13,13 +13,12 @@ jobs:
     runs-on: ubuntu-latest
 
     env:
-      # Ważne: zmienna DOCKERHUB_REPO = <użytkownik>/<repo>, czyli "mekkr/app-cache"
+      # <- TUTAJ musimy mieć DOKŁADNIE "mekkr/app-cache"
       DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/app-cache
-      # Końcowy obraz w GHCR = ghcr.io/<użytkownik>/weather-app
-      IMAGE_NAME: ghcr.io/${{ secrets.GHCR_USERNAME }}/weather-app
+      IMAGE_NAME:      ghcr.io/${{ secrets.GHCR_USERNAME }}/weather-app
 
     steps:
-      # 1) Set up QEMU (do budowy multi-arch)
+      # 1) Set up QEMU (potrzebne do budowy multi-arch)
       - name: Set up QEMU (to support building multi-arch images)
         uses: docker/setup-qemu-action@v2
 
@@ -28,7 +27,7 @@ jobs:
         with:
           buildkitd-flags: --allow-insecure-entitlement security.insecure
 
-      # 2) Logowanie do DockerHuba (cache) i do GHCR (push)
+      # 2) Logowanie do DockerHuba (cache) oraz GHCR
       - name: Log in to DockerHub
         uses: docker/login-action@v2
         with:
@@ -47,17 +46,13 @@ jobs:
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v4
         with:
-          # Kontekst = katalog główny repo (jeden poziom wyżej niż .github/workflows)
           context: ../
           file: ../Dockerfile
           platforms: linux/amd64,linux/arm64
 
-          # Pobieramy wcześniejszy cache z: mekkr/app-cache:cache-latest
           cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-latest
-          # Zapisujemy nowy cache pod tagiem: mekkr/app-cache:cache-<SHA>
           cache-to:   type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-${{ github.sha }},mode=max
 
-          # Tagi, ale nie pushujemy jeszcze finału:
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
@@ -74,14 +69,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
-      # 5) Skaning obrazu Trivy pod kątem CVE (CRITICAL i HIGH)
+      # 5) Skanowanie obrazu Trivy pod kątem CVE (CRITICAL i HIGH)
       - name: Run Trivy scan on built images
         id: trivy-scan
         run: |
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/amd64
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/arm64
 
-      # 6) Jeżeli Trivy nie znalazł żadnych Critical/High CVE – wypychamy do GHCR
+      # 6) Jeśli Trivy nie zwróci błędów (brak CRITICAL/HIGH) – wypychamy obraz do GHCR
       - name: Push images to GHCR
         if: ${{ success() }}
         run: |
