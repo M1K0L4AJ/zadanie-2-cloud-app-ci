@@ -2,69 +2,56 @@ name: Build and Push Multi-Arch Image with CVE Scan
 
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   pull_request:
-    branches:
-      - main
+    branches: [ main ]
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
     env:
-      # Turtle: CACHE z DockerHuba
       DOCKERHUB_REPO: ${{ secrets.DOCKERHUB_USERNAME }}/app-cache
-      # Finalny obraz w GHCR (musi być lowercase!): ghcr.io/m1k0l4aj/weather-app
       IMAGE_NAME:      ghcr.io/${{ secrets.GHCR_USERNAME }}/weather-app
 
     steps:
-      # 1) Przygotowujemy QEMU i Buildx do budowy multi-arch
-      - name: Set up QEMU (to support building multi-arch images)
+      # 1) QEMU & Buildx
+      - name: Set up QEMU (multi-arch)
         uses: docker/setup-qemu-action@v2
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
         with:
           buildkitd-flags: --allow-insecure-entitlement security.insecure
 
-      # 2) Logowanie do DockerHuba (cache) oraz GHCR (push)
+      # 2) Login
       - name: Log in to DockerHub
         uses: docker/login-action@v2
         with:
           registry: docker.io
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Log in to GitHub Container Registry (GHCR)
+      - name: Log in to GitHub Container Registry
         uses: docker/login-action@v2
         with:
           registry: ghcr.io
           username: ${{ secrets.GHCR_USERNAME }}
           password: ${{ secrets.CR_PAT }}
 
-      # 3) Budowa multi-arch obrazu i zapis/pobranie cache z DockerHuba
+      # 3) Build & cache
       - name: Build and push multi-arch image
         uses: docker/build-push-action@v4
         with:
-          # UWAGA: kontekst to katalog główny repo, czyli "."
           context: .
-          # TUTAJ: plik Dockerfile także w katalogu głównym repo, więc wystarczy "Dockerfile"
           file: Dockerfile
           platforms: linux/amd64,linux/arm64
-
-          # Pobieramy cache z "mekkr/app-cache:cache-latest"
           cache-from: type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-latest
-          # Zapisujemy cache pod "mekkr/app-cache:cache-<SHA>"
           cache-to:   type=registry,ref=${{ env.DOCKERHUB_REPO }}:cache-${{ github.sha }},mode=max
-
-          # Tagi finalnego obrazu (jeszcze nie wypychamy):
           tags: |
             ${{ env.IMAGE_NAME }}:latest
             ${{ env.IMAGE_NAME }}:${{ github.sha }}
           push: false
 
-      # 4) Instalacja Trivy (skan CVE)
+      # 4) Install Trivy
       - name: Install Trivy
         run: |
           sudo apt-get update
@@ -75,14 +62,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y trivy
 
-      # 5) Skaning obrazu (CRITICAL + HIGH)
+      # 5) Scan image
       - name: Run Trivy scan on built images
         id: trivy-scan
         run: |
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/amd64
           trivy image --exit-code 1 --severity CRITICAL,HIGH ${{ env.IMAGE_NAME }}:latest --platform linux/arm64
 
-      # 6) Jeżeli nie ma CRITICAL/HIGH CVE, wypychamy obraz do GHCR
+      # 6) Push final image
       - name: Push images to GHCR
         if: ${{ success() }}
         run: |
